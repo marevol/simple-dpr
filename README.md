@@ -1,4 +1,4 @@
-# Simple DPR (Work in Progress)
+# Simple DPR
 
 This project implements a simplified version of **Dense Passage Retrieval (DPR)**, focusing on effective document retrieval and question-answering tasks using the **Amazon ESCI dataset**. The model utilizes dual encoders to separately encode queries and documents for efficient information retrieval.
 

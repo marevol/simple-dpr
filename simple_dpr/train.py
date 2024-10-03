@@ -4,34 +4,29 @@ import torch
 import torch.nn.functional as F
 
 
-def dpr_loss(question_embeddings, positive_embeddings, negative_embeddings):
+def dpr_loss(question_embeddings, context_embeddings):
     """
     Compute DPR loss using in-batch negatives.
 
     Args:
         question_embeddings (Tensor): Question embeddings (batch_size, hidden_size)
-        positive_embeddings (Tensor): Positive context embeddings (batch_size, hidden_size)
-        negative_embeddings (Tensor): Negative context embeddings (batch_size * num_negatives, hidden_size)
+        context_embeddings (Tensor): Positive context embeddings (batch_size, hidden_size)
 
     Returns:
         Tensor: Loss value
     """
-    batch_size = question_embeddings.size(0)
+    # Normalize embeddings
     question_embeddings = F.normalize(question_embeddings, p=2, dim=1)
-    positive_embeddings = F.normalize(positive_embeddings, p=2, dim=1)
-    negative_embeddings = F.normalize(negative_embeddings, p=2, dim=1)
+    context_embeddings = F.normalize(context_embeddings, p=2, dim=1)
 
-    # Concatenate positive and negative embeddings
-    context_embeddings = torch.cat(
-        [positive_embeddings, negative_embeddings], dim=0
-    )  # (batch_size + negatives, hidden_size)
+    # Compute similarity scores between all question and positive pairs (batch_size x batch_size)
+    scores = torch.matmul(question_embeddings, context_embeddings.t())
 
-    # Compute scores and loss
-    scores = torch.matmul(question_embeddings, context_embeddings.t())  # (batch_size, batch_size + negatives)
-    labels = torch.arange(batch_size).to(question_embeddings.device)
+    # Targets are diagonal elements (correct pairs)
+    targets = torch.arange(scores.size(0)).long().to(question_embeddings.device)
 
-    # Adjust loss calculation for multiple negatives per positive
-    loss = F.cross_entropy(scores, labels)
+    # Compute cross-entropy loss
+    loss = F.cross_entropy(scores, targets)
     return loss
 
 
@@ -44,7 +39,7 @@ def train_dpr(
     device="cpu",
 ):
     """
-    Train DPR model with provided data loader.
+    Train DPR model with in-batch negatives.
 
     Args:
         question_encoder (DPRQuestionEncoder): Question encoder model
@@ -58,28 +53,25 @@ def train_dpr(
         None
     """
     logger = logging.getLogger(__name__)
-    question_encoder.train()
-    context_encoder.train()
 
     for epoch in range(num_epochs):
+        question_encoder.train()
+        context_encoder.train()
         total_loss = 0
         for batch_idx, batch in enumerate(train_loader):
             optimizer.zero_grad()
 
             question_input_ids = batch["question_input_ids"].to(device)
             question_attention_mask = batch["question_attention_mask"].to(device)
-            positive_input_ids = batch["positive_input_ids"].to(device)
-            positive_attention_mask = batch["positive_attention_mask"].to(device)
-            negative_input_ids = batch["negative_input_ids"].view(-1, batch["negative_input_ids"].size(-1)).to(device)
-            negative_attention_mask = (
-                batch["negative_attention_mask"].view(-1, batch["negative_attention_mask"].size(-1)).to(device)
-            )
+            context_input_ids = batch["context_input_ids"].to(device)
+            context_attention_mask = batch["context_attention_mask"].to(device)
 
+            # Encode questions and positive contexts
             question_embeddings = question_encoder(question_input_ids, question_attention_mask)
-            positive_embeddings = context_encoder(positive_input_ids, positive_attention_mask)
-            negative_embeddings = context_encoder(negative_input_ids, negative_attention_mask)
+            context_embeddings = context_encoder(context_input_ids, context_attention_mask)
 
-            loss = dpr_loss(question_embeddings, positive_embeddings, negative_embeddings)
+            # Compute loss using in-batch negatives
+            loss = dpr_loss(question_embeddings, context_embeddings)
             loss.backward()
             optimizer.step()
 
